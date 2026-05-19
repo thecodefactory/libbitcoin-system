@@ -990,7 +990,16 @@ inline error::op_error_t CLASS::
 op_check_sig() NOEXCEPT
 {
     const auto ec = op_check_sig_verify();
-    if (ec == error::op_check_sig_empty_key)
+
+    // BIP342: If public key empty, script MUST fail and end.
+    const auto bip342 = state::is_enabled(flags::bip342_rule);
+    if (bip342 && (
+        ec == error::op_check_sig_empty_key ||
+        ec == error::op_check_schnorr_sig1 ||
+        ec == error::op_check_schnorr_sig2 ||
+        ec == error::op_check_schnorr_sig3 ||
+        ec == error::op_check_schnorr_sig4 ||
+        ec == error::op_check_schnorr_sig5))
         return ec;
 
     // BIP66: if DER encoding invalid script MUST fail and end.
@@ -1019,7 +1028,7 @@ op_check_sig_verify() NOEXCEPT
     {
         // If signature is empty, script MUST fail and end (or push false).
         if (endorsement->empty())
-            return error::op_check_sig_verify2;
+            return error::op_check_schnorr_sig1;
 
         // If public key is 32 bytes it is a bip340 schnorr key.
         // If signature is not empty, it is validated against public key.
@@ -1029,20 +1038,20 @@ op_check_sig_verify() NOEXCEPT
             uint8_t sighash_flags;
             const auto& sig = state::schnorr_split(sighash_flags, *endorsement);
             if (sighash_flags == chain::coverage::invalid)
-                return error::op_check_sig_verify3;
+                return error::op_check_schnorr_sig2;
 
             // Generate signature hash.
             hash_digest hash{};
             if (!state::signature_hash(hash, sighash_flags))
-                return error::op_check_sig_verify4;
+                return error::op_check_schnorr_sig3;
 
             // Verify schnorr signature against public key and signature hash.
             if (!schnorr::verify_signature(*key, hash, sig))
-                return error::op_check_sig_verify5;
+                return error::op_check_schnorr_sig4;
 
             // If signature not empty, opcode counted toward sigops budget.
             if (!state::sigops_increment())
-                return error::op_check_sig_verify6;
+                return error::op_check_schnorr_sig5;
         }
 
         // If public key size is neither 0 nor 32 bytes, it is an unknown type.
@@ -1052,7 +1061,7 @@ op_check_sig_verify() NOEXCEPT
     }
 
     if (endorsement->empty())
-        return error::op_check_sig_verify7;
+        return error::op_check_sig_verify3;
 
     // Split endorsement into DER signature and signature hash flags.
     uint8_t sighash_flags;
@@ -1068,11 +1077,11 @@ op_check_sig_verify() NOEXCEPT
     hash_digest hash{};
     const auto subscript = state::subscript(endorsement);
     if (!state::signature_hash(hash, *subscript, sighash_flags))
-        return error::op_check_sig_verify8;
+        return error::op_check_sig_verify4;
 
     // Verify ECDSA signature against public key and signature hash.
     if (!ecdsa::verify_signature(*key, hash, sig))
-        return error::op_check_sig_verify9;
+        return error::op_check_sig_verify5;
 
     // TODO: use sighash and key to generate signature in sign mode.
     return error::op_success;
@@ -1163,7 +1172,7 @@ op_check_multisig_verify() NOEXCEPT
         // BIP66: if DER encoding invalid script MUST fail and end.
         ec_signature sig;
         if (!ecdsa::parse_signature(sig, der, bip66))
-            return error::op_check_sig_parse_signature;
+            return error::op_check_multisig_parse_signature;
 
         // Signature hash caching (bypass signature hash if same as previous).
         if (state::uncached(sighash_flags))
